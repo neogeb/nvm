@@ -1,7 +1,5 @@
 @echo off
-setlocal EnableExtensions EnableDelayedExpansion
-
-rem === AJUSTA RUTAS SI CAMBIAN EN TU EQUIPO ===
+rem === AJUSTA ESTAS RUTAS A TU EQUIPO ===
 set "NODE12=C:\node\v12.18.2"
 set "NODE14=C:\node\v14.21.3"
 set "NODE22=C:\Program Files\nodejs"
@@ -23,42 +21,38 @@ if not exist "%TARGET%\node.exe" (
   goto :end
 )
 
-rem ===== Construir PATH nuevo quitando otras rutas de Node =====
-set "NEWPATH="
-for %%I in ("%PATH:;=","%") do (
-  set "P=%%~I"
-  if /I not "!P!"=="%NODE12%" if /I not "!P!"=="%NODE14%" if /I not "!P!"=="%NODE22%" (
-    if defined NEWPATH (
-      set "NEWPATH=!NEWPATH!;!P!"
-    ) else (
-      set "NEWPATH=!P!"
-    )
-  )
-)
+call :ensure_npm "%TARGET%"
 
-rem Prependemos la seleccionada
-if defined NEWPATH (
-  set "NEWPATH=%TARGET%;!NEWPATH!"
-) else (
-  set "NEWPATH=%TARGET%"
-)
+rem ---- Sesion actual: prepend al PATH ----
+set "PATH=%TARGET%;%PATH%"
 
-set "PATH=!NEWPATH!"
-
-echo.
 echo [OK] Node activado desde: "%TARGET%"
 for /f "delims=" %%v in ('node -v 2^>nul') do echo   Node %%v
-for /f "delims=" %%v in ('npm -v 2^>nul') do echo   npm  %%v
+for /f "delims=" %%v in ('npm -v  2^>nul') do echo   npm  %%v
 echo.
 
 if /I "%~2"=="--persist" (
+  rem OJO: setx puede truncar si el PATH de usuario es muy largo.
   setx PATH "%PATH%" >nul
-  echo [OK] PATH de usuario actualizado de forma permanente. Abre una nueva consola para que aplique.
+  echo [OK] PATH de usuario actualizado. Abre una nueva consola para que aplique.
 ) else (
-  echo [INFO] Cambio valido solo en ESTA ventana. Agrega --persist para guardarlo.
+  echo [INFO] Cambio valido solo en ESTA ventana. Usa --persist para guardar.
 )
 
 goto :end
+
+:ensure_npm
+rem Crea wrappers npm/npx si no existen
+set "BASE=%~1"
+if not exist "%BASE%\npm.cmd" (
+  >"%BASE%\npm.cmd" echo @echo off
+  >>"%BASE%\npm.cmd" echo "%~1\node.exe" "%~1\node_modules\npm\bin\npm-cli.js" %%*
+)
+if not exist "%BASE%\npx.cmd" (
+  >"%BASE%\npx.cmd" echo @echo off
+  >>"%BASE%\npx.cmd" echo "%~1\node.exe" "%~1\node_modules\npm\bin\npx-cli.js" %%*
+)
+exit /b 0
 
 :usage
 echo Uso:
@@ -67,7 +61,5 @@ echo Ejemplos:
 echo   usarnode 12
 echo   usarnode 14 --persist
 echo   usarnode 22
-goto :end
-
+echo.
 :end
-endlocal
