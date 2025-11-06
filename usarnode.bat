@@ -1,65 +1,72 @@
-@echo off
-rem === AJUSTA ESTAS RUTAS A TU EQUIPO ===
-set "NODE12=C:\node\v12.18.2"
-set "NODE14=C:\node\v14.21.3"
-set "NODE22=C:\Program Files\nodejs"
-
-if "%~1"=="" goto :usage
-
-set "TARGET="
-if /I "%~1"=="12" set "TARGET=%NODE12%"
-if /I "%~1"=="14" set "TARGET=%NODE14%"
-if /I "%~1"=="22" set "TARGET=%NODE22%"
-
-if not defined TARGET (
-  echo [ERROR] Version no soportada: %~1
-  goto :end
+param(
+  [Parameter(Mandatory=$true)][ValidateSet('12','14','22')] [string]$version,
+  [switch]$SessionOnly  # si lo usas, cambia solo esta ventana; si NO, también deja persistente (usuario)
 )
 
-if not exist "%TARGET%\node.exe" (
-  echo [ERROR] No se encontro node.exe en "%TARGET%"
-  goto :end
-)
+# === AJUSTA ESTAS RUTAS SI CAMBIAN EN TU PC ===
+$node12 = 'C:\node\v12.18.2'
+$node14 = 'C:\node\v14.21.3'
+$node22 = 'C:\Program Files\nodejs'  # instalación por defecto
 
-call :ensure_npm "%TARGET%"
+$target = switch ($version) {
+  '12' { $node12 }
+  '14' { $node14 }
+  '22' { $node22 }
+}
 
-rem ---- Sesion actual: prepend al PATH ----
-set "PATH=%TARGET%;%PATH%"
+if (-not (Test-Path (Join-Path $target 'node.exe'))) {
+  Write-Error "No se encontró node.exe en '$target'. Ajusta la ruta o revisa la instalación."
+  exit 1
+}
 
-echo [OK] Node activado desde: "%TARGET%"
-for /f "delims=" %%v in ('node -v 2^>nul') do echo   Node %%v
-for /f "delims=" %%v in ('npm -v  2^>nul') do echo   npm  %%v
-echo.
+# --- Helpers: leer/escribir PATH de usuario sin tocar el del sistema ---
+function Get-UserPath {
+  [Environment]::GetEnvironmentVariable('Path','User')
+}
+function Set-UserPath($newPath) {
+  [Environment]::SetEnvironmentVariable('Path',$newPath,'User')
+}
 
-if /I "%~2"=="--persist" (
-  rem OJO: setx puede truncar si el PATH de usuario es muy largo.
-  setx PATH "%PATH%" >nul
-  echo [OK] PATH de usuario actualizado. Abre una nueva consola para que aplique.
-) else (
-  echo [INFO] Cambio valido solo en ESTA ventana. Usa --persist para guardar.
-)
+# Rutas de Node a limpiar del PATH de usuario (para no duplicar/mezclar)
+$knownNodeDirs = @($node12, $node14, $node22) | Where-Object { $_ -and (Test-Path $_) }
 
-goto :end
+# 1) Construye el nuevo PATH de usuario preservando TODO lo demás
+$userPath = Get-UserPath
+$parts = @()
+if ($userPath) {
+  $parts = $userPath -split ';' | Where-Object { $_ -ne '' }
+}
 
-:ensure_npm
-rem Crea wrappers npm/npx si no existen
-set "BASE=%~1"
-if not exist "%BASE%\npm.cmd" (
-  >"%BASE%\npm.cmd" echo @echo off
-  >>"%BASE%\npm.cmd" echo "%~1\node.exe" "%~1\node_modules\npm\bin\npm-cli.js" %%*
-)
-if not exist "%BASE%\npx.cmd" (
-  >"%BASE%\npx.cmd" echo @echo off
-  >>"%BASE%\npx.cmd" echo "%~1\node.exe" "%~1\node_modules\npm\bin\npx-cli.js" %%*
-)
-exit /b 0
+# filtra cualquier entrada que sea una de las rutas de Node conocidas (case-insensitive)
+$filtered = $parts | Where-Object {
+  $p = $_.Trim()
+  -not ($knownNodeDirs | Where-Object { $p -ieq $_ })
+}
 
-:usage
-echo Uso:
-echo   usarnode 12 ^| 14 ^| 22  [--persist]
-echo Ejemplos:
-echo   usarnode 12
-echo   usarnode 14 --persist
-echo   usarnode 22
-echo.
-:end
+# Prepend el target y recompón
+$newUserPath = @($target) + $filtered
+$newUserPathStr = ($newUserPath -join ';')
+
+# 2) Aplica a la SESIÓN ACTUAL siempre
+$env:PATH = "$target;" + ($env:PATH -split ';' | Where-Object {
+  $p = $_.Trim()
+  -not ($knownNodeDirs | Where-Object { $p -ieq $_ })
+} | ForEach-Object { $_ } -join ';')
+
+# 3) Si NO es solo sesión, también deja persistente en el PATH de usuario
+if (-not $SessionOnly) {
+  Set-UserPath $newUserPathStr
+  Write-Host "[OK] PATH de USUARIO actualizado (persistente). Abre una nueva consola para verlo aplicado." -ForegroundColor Green
+} else {
+  Write-Host "[INFO] Cambio aplicado SOLO a esta ventana (sesión actual)." -ForegroundColor Yellow
+}
+
+# 4) Comprobación
+$nodeVer = & "$target\node.exe" -v 2>$null
+$npmVer  = ''
+if (Test-Path (Join-Path $target 'node_modules\npm\bin\npm-cli.js')) {
+  $npmVer = & "$target\node.exe" (Join-Path $target 'node_modules\npm\bin\npm-cli.js') -v 2>$null
+}
+Write-Host ("Usando Node desde: " + $target)
+Write-Host ("  node " + $nodeVer)
+if ($npmVer) { Write-Host ("  npm  " + $npmVer) } else { Write-Host "  npm  (no encontrado en esa carpeta)" }
